@@ -34,7 +34,22 @@ global _start
 _start:
   call print_hello 
   call x11_connect_to_server
+  mov r15, rax ; Store the socket file descriptor in r15.
+
+  mov rdi, rax
   call x11_send_handshake
+
+  mov r12d, eax ; Store the window root id in r12.
+
+  call x11_next_id
+  mov r13d, eax ; Store the gc_id in r13.
+
+  call x11_next_id
+  mov r14d, eax ; Store the font_id in r14.
+
+  mov rdi, r15
+  mov esi, r14d
+  call x11_open_font
 
   mov rax, SYSCALL_EXIT
   mov rdi, 0
@@ -44,6 +59,65 @@ die:
   mov rax, SYSCALL_EXIT
   mov rdi, 1
   syscall  
+
+; Open the font on the server side.
+; @param rdi The socket file descriptor.
+; @param esi The font id.
+x11_open_font:
+static x11_open_font:function
+  push rbp
+  mov rbp, rsp
+
+  %define OPEN_FONT_NAME_BYTE_COUNT 5
+  %define OPEN_FONT_PADDING ((4 - (OPEN_FONT_NAME_BYTE_COUNT % 4)) % 4)
+  %define OPEN_FONT_PACKET_U32_COUNT (3 + (OPEN_FONT_NAME_BYTE_COUNT + OPEN_FONT_PADDING) / 4)
+  %define X11_OP_REQ_OPEN_FONT 0x2d
+
+  sub rsp, 6*8
+  mov DWORD [rsp + 0*4], X11_OP_REQ_OPEN_FONT | (OPEN_FONT_NAME_BYTE_COUNT << 16)
+  mov DWORD [rsp + 1*4], esi
+  mov DWORD [rsp + 2*4], OPEN_FONT_NAME_BYTE_COUNT
+  mov BYTE [rsp + 3*4 + 0], 'f'
+  mov BYTE [rsp + 3*4 + 1], 'i'
+  mov BYTE [rsp + 3*4 + 2], 'x'
+  mov BYTE [rsp + 3*4 + 3], 'e'
+  mov BYTE [rsp + 3*4 + 4], 'd'
+
+
+  mov rax, SYSCALL_WRITE
+  mov rdi, rdi
+  lea rsi, [rsp]
+  mov rdx, OPEN_FONT_PACKET_U32_COUNT*4
+  syscall
+
+  cmp rax, OPEN_FONT_PACKET_U32_COUNT*4
+  jnz die
+
+  add rsp, 6*8
+
+  pop rbp
+  ret
+
+; Increment the global id.
+; @return The new id.
+x11_next_id:
+static x11_next_id:function
+  push rbp
+  mov rbp, rsp
+
+  mov eax, DWORD [id] ; Load global id.
+
+  mov edi, DWORD [id_base] ; Load global id_base.
+  mov edx, DWORD [id_mask] ; Load global id_mask.
+
+  ; Return: id_mask & (id) | id_base
+  and eax, edx
+  or eax, edi
+
+  add DWORD [id], 1 ; Increment id.
+
+  pop rbp
+  ret
 
 ; Send the handshake to the X11 server and read the returned system information.
 ; @param rdi The socket file descriptor
@@ -131,6 +205,8 @@ static x11_send_handshake:function
   pop rbp ; Restore rbp
   ret
 
+; Create a UNIX domain socket and connect to the X11 server.
+; @returns The socket file descriptor.
 x11_connect_to_server:
 static x11_connect_to_server:function
   push rbp
